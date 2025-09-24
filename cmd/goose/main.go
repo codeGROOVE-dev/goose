@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -90,6 +91,7 @@ type App struct {
 	updateInterval      time.Duration
 	consecutiveFailures int
 	mu                  sync.RWMutex
+	menuMutex           sync.Mutex // Mutex to prevent concurrent menu rebuilds
 	enableAutoBrowser   bool
 	hideStaleIncoming   bool
 	hasPerformedInitialDiscovery bool // Track if we've done the first poll to distinguish from real state changes
@@ -157,7 +159,7 @@ func main() {
 		Level:     logLevel,
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, opts)))
-	slog.Info("Starting GitHub PR Monitor", "version", version, "commit", commit, "date", date)
+	slog.Info("Starting Goose", "version", version, "commit", commit, "date", date)
 	slog.Info("Configuration", "update_interval", updateInterval, "max_retries", maxRetries, "max_delay", maxRetryDelay)
 	slog.Info("Browser auto-open configuration", "startup_delay", browserOpenDelay, "max_per_minute", maxBrowserOpensMinute, "max_per_day", maxBrowserOpensDay)
 
@@ -286,23 +288,111 @@ func main() {
 func (app *App) onReady(ctx context.Context) {
 	slog.Info("System tray ready")
 
+	// On Linux, immediately build a minimal menu to ensure it's visible
+	if runtime.GOOS == "linux" {
+		slog.Info("[LINUX] Building initial minimal menu")
+		app.systrayInterface.ResetMenu()
+		placeholderItem := app.systrayInterface.AddMenuItem("Loading...", "Goose is starting up")
+		if placeholderItem != nil {
+			placeholderItem.Disable()
+		}
+		app.systrayInterface.AddSeparator()
+		quitItem := app.systrayInterface.AddMenuItem("Quit", "Quit Goose")
+		if quitItem != nil {
+			quitItem.Click(func() {
+				slog.Info("Quit clicked")
+				systray.Quit()
+			})
+		}
+	}
+
 	// Set up click handlers first (needed for both success and error states)
 	systray.SetOnClick(func(menu systray.IMenu) {
 		slog.Debug("Icon clicked")
 
-		// Check if we can perform a forced refresh (rate limited to every 10 seconds)
+		// Check if we're in auth error state and should retry
 		app.mu.RLock()
-		timeSinceLastSearch := time.Since(app.lastSearchAttempt)
+		hasAuthError := app.authError != ""
 		app.mu.RUnlock()
 
-		if timeSinceLastSearch >= minUpdateInterval {
-			slog.Info("[CLICK] Forcing search refresh", "lastSearchAgo", timeSinceLastSearch)
+		if hasAuthError {
+			slog.Info("[CLICK] Auth error detected, attempting to re-authenticate")
 			go func() {
-				app.updatePRs(ctx)
+				// Try to reinitialize clients which will attempt to get token via gh auth token
+				if err := app.initClients(ctx); err != nil {
+					slog.Warn("[CLICK] Re-authentication failed", "error", err)
+					app.mu.Lock()
+					app.authError = err.Error()
+					app.mu.Unlock()
+				} else {
+					// Success! Clear auth error and reload user
+					slog.Info("[CLICK] Re-authentication successful")
+					app.mu.Lock()
+					app.authError = ""
+					app.mu.Unlock()
+
+					// Load current user
+					if app.client != nil {
+						var user *github.User
+						err := retry.Do(func() error {
+							var retryErr error
+							user, _, retryErr = app.client.Users.Get(ctx, "")
+							if retryErr != nil {
+								slog.Warn("GitHub Users.Get failed (will retry)", "error", retryErr)
+								return retryErr
+							}
+							return nil
+						},
+							retry.Attempts(maxRetries),
+							retry.DelayType(retry.CombineDelay(retry.BackOffDelay, retry.RandomDelay)),
+							retry.MaxDelay(maxRetryDelay),
+							retry.OnRetry(func(n uint, err error) {
+								slog.Debug("[RETRY] Retrying GitHub API call", "attempt", n, "error", err)
+							}),
+						)
+						if err == nil && user != nil {
+							if app.targetUser == "" {
+								app.targetUser = user.GetLogin()
+								slog.Info("Set target user to current user", "user", app.targetUser)
+							}
+						}
+					}
+
+					// Update tooltip
+					tooltip := "Goose - Loading PRs..."
+					if app.targetUser != "" {
+						tooltip = fmt.Sprintf("Goose - Loading PRs... (@%s)", app.targetUser)
+					}
+					systray.SetTooltip(tooltip)
+
+					// Rebuild menu to remove error state
+					app.rebuildMenu(ctx)
+
+					// Start update loop if not already running
+					if !app.menuInitialized {
+						app.menuInitialized = true
+						go app.updateLoop(ctx)
+					} else {
+						// Just do a single update to refresh data
+						go app.updatePRs(ctx)
+					}
+				}
 			}()
 		} else {
-			remainingTime := minUpdateInterval - timeSinceLastSearch
-			slog.Debug("[CLICK] Rate limited", "lastSearchAgo", timeSinceLastSearch, "remaining", remainingTime)
+			// Normal operation - check if we can perform a forced refresh
+			app.mu.RLock()
+			timeSinceLastSearch := time.Since(app.lastSearchAttempt)
+			app.mu.RUnlock()
+
+			if timeSinceLastSearch >= minUpdateInterval {
+				slog.Info("[CLICK] Forcing search refresh", "lastSearchAgo", timeSinceLastSearch)
+				go func() {
+					app.updatePRs(ctx)
+				}()
+			} else {
+				remainingTime := minUpdateInterval - timeSinceLastSearch
+				slog.Debug("[CLICK] Rate limited", "lastSearchAgo", timeSinceLastSearch, "remaining", remainingTime)
+			}
 		}
 
 		if menu != nil {
@@ -323,8 +413,9 @@ func (app *App) onReady(ctx context.Context) {
 
 	// Check if we have an auth error
 	if app.authError != "" {
-		systray.SetTitle("⚠️")
-		systray.SetTooltip("GitHub PR Monitor - Authentication Error")
+		systray.SetTitle("")
+		app.setTrayIcon(IconLock)
+		systray.SetTooltip("Goose - Authentication Error")
 		// Create initial error menu
 		app.rebuildMenu(ctx)
 		// Clean old cache on startup
@@ -332,12 +423,13 @@ func (app *App) onReady(ctx context.Context) {
 		return
 	}
 
-	systray.SetTitle("Loading PRs...")
+	systray.SetTitle("")
+	app.setTrayIcon(IconSmiling) // Start with smiling icon while loading
 
 	// Set tooltip based on whether we're using a custom user
-	tooltip := "GitHub PR Monitor"
+	tooltip := "Goose - Loading PRs..."
 	if app.targetUser != "" {
-		tooltip = fmt.Sprintf("GitHub PR Monitor - @%s", app.targetUser)
+		tooltip = fmt.Sprintf("Goose - Loading PRs... (@%s)", app.targetUser)
 	}
 	systray.SetTooltip(tooltip)
 
@@ -355,8 +447,9 @@ func (app *App) updateLoop(ctx context.Context) {
 			slog.Error("PANIC in update loop", "panic", r)
 
 			// Set error state in UI
-			systray.SetTitle("💥")
-			systray.SetTooltip("GitHub PR Monitor - Critical error")
+			systray.SetTitle("")
+			app.setTrayIcon(IconWarning)
+			systray.SetTooltip("Goose - Critical error")
 
 			// Update failure count
 			app.mu.Lock()
@@ -424,23 +517,19 @@ func (app *App) updatePRs(ctx context.Context) {
 		app.mu.Unlock()
 
 		// Progressive degradation based on failure count
-		var title, tooltip string
+		var tooltip string
+		var iconType IconType
 		switch {
-		case failureCount == 1:
-			title = "⚠️"
-			tooltip = "GitHub PR Monitor - Temporary error, retrying..."
 		case failureCount <= minorFailureThreshold:
-			title = "⚠️"
-			tooltip = fmt.Sprintf("GitHub PR Monitor - %d consecutive failures", failureCount)
-		case failureCount <= majorFailureThreshold:
-			title = "❌"
-			tooltip = "GitHub PR Monitor - Multiple failures, check connection"
+			iconType = IconWarning
+			tooltip = fmt.Sprintf("Goose - %d consecutive failures", failureCount)
 		default:
-			title = "💀"
-			tooltip = "GitHub PR Monitor - Service degraded, check authentication"
+			iconType = IconWarning
+			tooltip = "Goose - Connection failures, check network/auth"
 		}
 
-		systray.SetTitle(title)
+		systray.SetTitle("")
+		app.setTrayIcon(iconType)
 
 		// Include time since last success and user info
 		timeSinceSuccess := "never"
@@ -602,23 +691,19 @@ func (app *App) updatePRsWithWait(ctx context.Context) {
 		app.mu.Unlock()
 
 		// Progressive degradation based on failure count
-		var title, tooltip string
+		var tooltip string
+		var iconType IconType
 		switch {
-		case failureCount == 1:
-			title = "⚠️"
-			tooltip = "GitHub PR Monitor - Temporary error, retrying..."
 		case failureCount <= minorFailureThreshold:
-			title = "⚠️"
-			tooltip = fmt.Sprintf("GitHub PR Monitor - %d consecutive failures", failureCount)
-		case failureCount <= majorFailureThreshold:
-			title = "❌"
-			tooltip = "GitHub PR Monitor - Multiple failures, check connection"
+			iconType = IconWarning
+			tooltip = fmt.Sprintf("Goose - %d consecutive failures", failureCount)
 		default:
-			title = "💀"
-			tooltip = "GitHub PR Monitor - Service degraded, check authentication"
+			iconType = IconWarning
+			tooltip = "Goose - Connection failures, check network/auth"
 		}
 
-		systray.SetTitle(title)
+		systray.SetTitle("")
+		app.setTrayIcon(iconType)
 		systray.SetTooltip(tooltip)
 
 		// Create or update menu to show error state
@@ -740,7 +825,7 @@ func (app *App) tryAutoOpenPR(ctx context.Context, pr PR, autoBrowserEnabled boo
 			slog.Warn("Auto-open strict validation failed", "url", sanitizeForLog(pr.URL), "error", err)
 			return
 		}
-		if err := openURL(ctx, pr.URL, pr.ActionKind); err != nil {
+		if err := openURL(ctx, pr.URL); err != nil {
 			slog.Error("[BROWSER] Failed to auto-open PR", "url", pr.URL, "error", err)
 		} else {
 			app.browserRateLimiter.RecordOpen(pr.URL)

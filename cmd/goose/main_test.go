@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -196,8 +197,15 @@ func TestTrayIconRestoredAfterNetworkRecovery(t *testing.T) {
 	}
 	app.setTrayTitle()
 	initialTitle := mock.title
-	if initialTitle != "🪿 1" {
-		t.Errorf("Expected initial tray title '🪿 1', got %q", initialTitle)
+
+	// Expected title varies by platform
+	expectedTitle := "1/1" // Linux format
+	if runtime.GOOS == "darwin" {
+		expectedTitle = "1" // macOS format
+	}
+
+	if initialTitle != expectedTitle {
+		t.Errorf("Expected initial tray title %q, got %q", expectedTitle, initialTitle)
 	}
 
 	// Simulate network failure - updatePRs would set warning icon and return early
@@ -213,8 +221,8 @@ func TestTrayIconRestoredAfterNetworkRecovery(t *testing.T) {
 	// With our fix, setTrayTitle() is now called after successful fetch
 	app.setTrayTitle()
 	recoveredTitle := mock.title
-	if recoveredTitle != "🪿 1" {
-		t.Errorf("Expected tray title to be restored to '🪿 1' after recovery, got %q", recoveredTitle)
+	if recoveredTitle != expectedTitle {
+		t.Errorf("Expected tray title to be restored to %q after recovery, got %q", expectedTitle, recoveredTitle)
 	}
 }
 
@@ -447,15 +455,19 @@ func TestSoundPlaybackDuringTransitions(t *testing.T) {
 			// Actual sound playback is verified through integration testing.
 
 			// Set initial state
+			app.mu.Lock()
 			app.incoming = tt.initialIncoming
 			app.outgoing = tt.initialOutgoing
+			app.mu.Unlock()
 
 			// Run first check to establish baseline
 			app.checkForNewlyBlockedPRs(ctx)
 
 			// Update to new state
+			app.mu.Lock()
 			app.incoming = tt.updatedIncoming
 			app.outgoing = tt.updatedOutgoing
+			app.mu.Unlock()
 
 			// Run check again to detect transitions
 			app.checkForNewlyBlockedPRs(ctx)
@@ -465,6 +477,7 @@ func TestSoundPlaybackDuringTransitions(t *testing.T) {
 			if len(tt.expectedSounds) > 0 {
 				// Check that blocked PRs are tracked in previousBlockedPRs
 				blocked := 0
+				app.mu.RLock()
 				for _, pr := range app.incoming {
 					if pr.NeedsReview && app.previousBlockedPRs[pr.URL] {
 						blocked++
@@ -475,6 +488,7 @@ func TestSoundPlaybackDuringTransitions(t *testing.T) {
 						blocked++
 					}
 				}
+				app.mu.RUnlock()
 				if blocked == 0 {
 					t.Errorf("%s: expected blocked PRs to be tracked in previousBlockedPRs", tt.description)
 				}

@@ -20,8 +20,7 @@ import (
 var _ *systray.MenuItem = nil
 
 // openURL safely opens a URL in the default browser after validation.
-// action parameter is optional and specifies the expected action type for tracking.
-func openURL(ctx context.Context, rawURL string, action string) error {
+func openURL(ctx context.Context, rawURL string) error {
 	// Parse and validate the URL
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -46,15 +45,10 @@ func openURL(ctx context.Context, rawURL string, action string) error {
 		return errors.New("URLs with user info are not allowed")
 	}
 
-	// Add goose parameter to track source and action for GitHub and dash URLs
+	// Add goose=1 parameter to track source for GitHub and dash URLs
 	if u.Host == "github.com" || u.Host == "www.github.com" || u.Host == "dash.ready-to-review.dev" {
 		q := u.Query()
-		// Use action if provided, otherwise default to "1" for backward compatibility
-		if action != "" {
-			q.Set("goose", action)
-		} else {
-			q.Set("goose", "1")
-		}
+		q.Set("goose", "1")
 		u.RawQuery = q.Encode()
 		rawURL = u.String()
 	}
@@ -192,31 +186,61 @@ func (app *App) countPRs() PRCounts {
 	}
 }
 
-// setTrayTitle updates the system tray title based on PR counts.
+// setTrayTitle updates the system tray title and icon based on PR counts.
 func (app *App) setTrayTitle() {
 	counts := app.countPRs()
 
-	// Set title based on PR state
+	// Set title and icon based on PR state
 	var title string
-	switch {
-	case counts.IncomingBlocked == 0 && counts.OutgoingBlocked == 0:
-		title = "😊"
-	case counts.IncomingBlocked > 0 && counts.OutgoingBlocked > 0:
-		title = fmt.Sprintf("🪿 %d 🎉 %d", counts.IncomingBlocked, counts.OutgoingBlocked)
-	case counts.IncomingBlocked > 0:
-		title = fmt.Sprintf("🪿 %d", counts.IncomingBlocked)
-	default:
-		title = fmt.Sprintf("🎉 %d", counts.OutgoingBlocked)
+	var iconType IconType
+
+	// On Linux, always show counts if there are any PRs
+	// This helps since not all desktop environments show the text
+	if runtime.GOOS == "linux" && (counts.IncomingTotal > 0 || counts.OutgoingTotal > 0) {
+		// Show blocked/total format for better visibility
+		if counts.IncomingBlocked > 0 && counts.OutgoingBlocked > 0 {
+			title = fmt.Sprintf("%d/%d • %d/%d", counts.IncomingBlocked, counts.IncomingTotal, counts.OutgoingBlocked, counts.OutgoingTotal)
+			iconType = IconBoth
+		} else if counts.IncomingBlocked > 0 {
+			title = fmt.Sprintf("%d/%d", counts.IncomingBlocked, counts.IncomingTotal)
+			iconType = IconGoose
+		} else if counts.OutgoingBlocked > 0 {
+			title = fmt.Sprintf("%d/%d", counts.OutgoingBlocked, counts.OutgoingTotal)
+			iconType = IconPopper
+		} else {
+			// No blocked PRs but there are PRs
+			title = fmt.Sprintf("0/%d", counts.IncomingTotal+counts.OutgoingTotal)
+			iconType = IconSmiling
+		}
+	} else {
+		// Original behavior for other platforms
+		switch {
+		case counts.IncomingBlocked == 0 && counts.OutgoingBlocked == 0:
+			title = ""
+			iconType = IconSmiling
+		case counts.IncomingBlocked > 0 && counts.OutgoingBlocked > 0:
+			title = fmt.Sprintf("%d / %d", counts.IncomingBlocked, counts.OutgoingBlocked)
+			iconType = IconBoth
+		case counts.IncomingBlocked > 0:
+			title = fmt.Sprintf("%d", counts.IncomingBlocked)
+			iconType = IconGoose
+		default:
+			title = fmt.Sprintf("%d", counts.OutgoingBlocked)
+			iconType = IconPopper
+		}
 	}
 
 	// Log title change with detailed counts
-	slog.Debug("[TRAY] Setting title",
+	slog.Info("[TRAY] Setting title and icon",
+		"os", runtime.GOOS,
 		"title", title,
+		"icon", iconType,
 		"incoming_total", counts.IncomingTotal,
 		"incoming_blocked", counts.IncomingBlocked,
 		"outgoing_total", counts.OutgoingTotal,
 		"outgoing_blocked", counts.OutgoingBlocked)
 	app.systrayInterface.SetTitle(title)
+	app.setTrayIcon(iconType)
 }
 
 // addPRSection adds a section of PRs to the menu.
@@ -372,11 +396,10 @@ func (app *App) addPRSection(ctx context.Context, prs []PR, sectionTitle string,
 			"blocked", sortedPRs[prIndex].NeedsReview || sortedPRs[prIndex].IsBlocked)
 		item := app.systrayInterface.AddMenuItem(title, tooltip)
 
-		// Capture URL and action to avoid loop variable capture bug
+		// Capture URL to avoid loop variable capture bug
 		prURL := sortedPRs[prIndex].URL
-		prAction := sortedPRs[prIndex].ActionKind
 		item.Click(func() {
-			if err := openURL(ctx, prURL, prAction); err != nil {
+			if err := openURL(ctx, prURL); err != nil {
 				slog.Error("failed to open url", "error", err)
 			}
 		})
@@ -532,10 +555,22 @@ func (app *App) generatePRSectionTitles(prs []PR, sectionTitle string, hiddenOrg
 
 // rebuildMenu completely rebuilds the menu from scratch.
 func (app *App) rebuildMenu(ctx context.Context) {
+	// Prevent concurrent menu rebuilds
+	app.menuMutex.Lock()
+	defer app.menuMutex.Unlock()
+
 	// Rebuild entire menu
+	slog.Info("[MENU] Starting rebuildMenu", "os", runtime.GOOS)
 
 	// Clear all existing menu items
 	app.systrayInterface.ResetMenu()
+	slog.Info("[MENU] Called ResetMenu")
+
+	// On Linux, add a small delay to ensure DBus properly processes the reset
+	// This helps prevent menu item duplication
+	if runtime.GOOS == "linux" {
+		time.Sleep(50 * time.Millisecond)
+	}
 
 	// Check for errors (auth or connection failures)
 	app.mu.RLock()
@@ -555,7 +590,7 @@ func (app *App) rebuildMenu(ctx context.Context) {
 		// Add error details
 		errorMsg := app.systrayInterface.AddMenuItem(authError, "Click to see setup instructions")
 		errorMsg.Click(func() {
-			if err := openURL(ctx, "https://cli.github.com/manual/gh_auth_login", ""); err != nil {
+			if err := openURL(ctx, "https://cli.github.com/manual/gh_auth_login"); err != nil {
 				slog.Error("failed to open setup instructions", "error", err)
 			}
 		})
@@ -665,7 +700,7 @@ func (app *App) rebuildMenu(ctx context.Context) {
 	// Add Web Dashboard link
 	dashboardItem := app.systrayInterface.AddMenuItem("Web Dashboard", "")
 	dashboardItem.Click(func() {
-		if err := openURL(ctx, "https://dash.ready-to-review.dev/", ""); err != nil {
+		if err := openURL(ctx, "https://dash.ready-to-review.dev/"); err != nil {
 			slog.Error("failed to open dashboard", "error", err)
 		}
 	})
@@ -753,10 +788,17 @@ func (app *App) addStaticMenuItems(ctx context.Context) {
 		// Add checkbox items for each org
 		for _, org := range orgs {
 			orgName := org // Capture for closure
-			orgItem := hideOrgsMenu.AddSubMenuItem(orgName, "")
-
-			// Check if org is currently hidden
+			// Add text checkmark for Linux
+			var orgText string
 			if hiddenOrgs[orgName] {
+				orgText = "✓ " + orgName
+			} else {
+				orgText = orgName
+			}
+			orgItem := hideOrgsMenu.AddSubMenuItem(orgText, "")
+
+			// Check if org is currently hidden (for non-Linux)
+			if runtime.GOOS != "linux" && hiddenOrgs[orgName] {
 				orgItem.Check()
 			}
 
@@ -764,89 +806,113 @@ func (app *App) addStaticMenuItems(ctx context.Context) {
 				app.mu.Lock()
 				if app.hiddenOrgs[orgName] {
 					delete(app.hiddenOrgs, orgName)
-					orgItem.Uncheck()
+					if runtime.GOOS != "linux" {
+						orgItem.Uncheck()
+					}
 					slog.Info("[SETTINGS] Unhiding org", "org", orgName)
 				} else {
 					app.hiddenOrgs[orgName] = true
-					orgItem.Check()
+					if runtime.GOOS != "linux" {
+						orgItem.Check()
+					}
 					slog.Info("[SETTINGS] Hiding org", "org", orgName)
 				}
-				// Menu always rebuilds now - no need to clear titles
 				app.mu.Unlock()
 
 				// Save settings
 				app.saveSettings()
 
-				// Rebuild menu to reflect changes
-				app.rebuildMenu(ctx)
+				// Note: Menu needs manual refresh on Linux to see changes
 			})
 		}
 	}
 
 	// Hide stale PRs
-	// Add 'Hide stale PRs' option
-	hideStaleItem := app.systrayInterface.AddMenuItem("Hide stale PRs (>90 days)", "")
+	// Add 'Hide stale PRs' option with text checkmark for Linux
+	var hideStaleText string
 	if app.hideStaleIncoming {
+		hideStaleText = "✓ Hide stale PRs (>90 days)"
+	} else {
+		hideStaleText = "Hide stale PRs (>90 days)"
+	}
+	hideStaleItem := app.systrayInterface.AddMenuItem(hideStaleText, "")
+	if runtime.GOOS != "linux" && app.hideStaleIncoming {
 		hideStaleItem.Check()
 	}
 	hideStaleItem.Click(func() {
 		app.mu.Lock()
 		app.hideStaleIncoming = !app.hideStaleIncoming
 		hideStale := app.hideStaleIncoming
-		// Menu always rebuilds now - no need to clear titles
 		app.mu.Unlock()
 
-		if hideStale {
-			hideStaleItem.Check()
-		} else {
-			hideStaleItem.Uncheck()
+		if runtime.GOOS != "linux" {
+			if hideStale {
+				hideStaleItem.Check()
+			} else {
+				hideStaleItem.Uncheck()
+			}
 		}
 
 		// Save settings to disk
 		app.saveSettings()
 
-		// Toggle hide stale PRs setting
-		// Force menu rebuild since hideStaleIncoming changed
-		app.rebuildMenu(ctx)
+		// Note: Menu needs manual refresh on Linux to see changes
+		slog.Info("[SETTINGS] Hide stale PRs toggled", "enabled", hideStale)
 	})
 
 	// Add login item option (macOS only)
 	addLoginItemUI(ctx, app)
 
 	// Audio cues
-	// Add 'Audio cues' option
-	audioItem := app.systrayInterface.AddMenuItem("Honks enabled", "Play sounds for notifications")
+	// Add 'Audio cues' option with text checkmark for Linux
 	app.mu.RLock()
+	var audioText string
 	if app.enableAudioCues {
+		audioText = "✓ Honks enabled"
+	} else {
+		audioText = "Honks enabled"
+	}
+	enableAudioCues := app.enableAudioCues
+	app.mu.RUnlock()
+	audioItem := app.systrayInterface.AddMenuItem(audioText, "Play sounds for notifications")
+	if runtime.GOOS != "linux" && enableAudioCues {
 		audioItem.Check()
 	}
-	app.mu.RUnlock()
 	audioItem.Click(func() {
 		app.mu.Lock()
 		app.enableAudioCues = !app.enableAudioCues
 		enabled := app.enableAudioCues
 		app.mu.Unlock()
 
-		if enabled {
-			audioItem.Check()
-			slog.Info("[SETTINGS] Audio cues enabled")
-		} else {
-			audioItem.Uncheck()
-			slog.Info("[SETTINGS] Audio cues disabled")
+		if runtime.GOOS != "linux" {
+			if enabled {
+				audioItem.Check()
+			} else {
+				audioItem.Uncheck()
+			}
 		}
+
+		slog.Info("[SETTINGS] Audio cues toggled", "enabled", enabled)
 
 		// Save settings to disk
 		app.saveSettings()
 	})
 
 	// Auto-open blocked PRs in browser
-	// Add 'Auto-open PRs' option
-	autoOpenItem := app.systrayInterface.AddMenuItem("Auto-open incoming PRs", "Automatically open newly blocked PRs in browser (rate limited)")
+	// Add 'Auto-open PRs' option with text checkmark for Linux
 	app.mu.RLock()
+	var autoText string
 	if app.enableAutoBrowser {
+		autoText = "✓ Auto-open incoming PRs"
+	} else {
+		autoText = "Auto-open incoming PRs"
+	}
+	enableAutoBrowser := app.enableAutoBrowser
+	app.mu.RUnlock()
+	autoOpenItem := app.systrayInterface.AddMenuItem(autoText, "Automatically open newly blocked PRs in browser (rate limited)")
+	if runtime.GOOS != "linux" && enableAutoBrowser {
 		autoOpenItem.Check()
 	}
-	app.mu.RUnlock()
 	autoOpenItem.Click(func() {
 		app.mu.Lock()
 		app.enableAutoBrowser = !app.enableAutoBrowser
@@ -857,13 +923,15 @@ func (app *App) addStaticMenuItems(ctx context.Context) {
 		}
 		app.mu.Unlock()
 
-		if enabled {
-			autoOpenItem.Check()
-			slog.Info("[SETTINGS] Auto-open blocked PRs enabled")
-		} else {
-			autoOpenItem.Uncheck()
-			slog.Info("[SETTINGS] Auto-open blocked PRs disabled")
+		if runtime.GOOS != "linux" {
+			if enabled {
+				autoOpenItem.Check()
+			} else {
+				autoOpenItem.Uncheck()
+			}
 		}
+
+		slog.Info("[SETTINGS] Auto-open blocked PRs toggled", "enabled", enabled)
 
 		// Save settings to disk
 		app.saveSettings()

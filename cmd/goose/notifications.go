@@ -56,39 +56,44 @@ func (app *App) processNotifications(ctx context.Context) {
 
 	slog.Info("[NOTIFY] PRs need notifications", "count", len(toNotify))
 
-	// Send notifications for each PR
-	playedHonk := false
-	playedRocket := false
+	// Process notifications in a goroutine to avoid blocking the UI thread
+	go func() {
+		// Send notifications for each PR
+		playedHonk := false
+		playedRocket := false
 
-	for i := range toNotify {
-		pr := toNotify[i]
-		isIncoming := false
-		// Check if it's in the incoming list
-		for j := range incoming {
-			if incoming[j].URL == pr.URL {
-				isIncoming = true
-				break
+		for i := range toNotify {
+			pr := toNotify[i]
+			isIncoming := false
+			// Check if it's in the incoming list
+			for j := range incoming {
+				if incoming[j].URL == pr.URL {
+					isIncoming = true
+					break
+				}
+			}
+
+			// Send notification
+			if isIncoming {
+				app.sendPRNotification(ctx, pr, "PR Blocked on You 🪿", "honk", &playedHonk)
+			} else {
+				// Add delay between different sound types in goroutine to avoid blocking
+				if playedHonk && !playedRocket {
+					time.Sleep(2 * time.Second)
+				}
+				app.sendPRNotification(ctx, pr, "Your PR is Blocked 🚀", "rocket", &playedRocket)
+			}
+
+			// Auto-open if enabled
+			if app.enableAutoBrowser && time.Since(app.startTime) > startupGracePeriod {
+				app.tryAutoOpenPR(ctx, pr, app.enableAutoBrowser, app.startTime)
 			}
 		}
 
-		// Send notification
-		if isIncoming {
-			app.sendPRNotification(ctx, pr, "PR Blocked on You 🪿", "honk", &playedHonk)
-		} else {
-			// Add delay between different sound types
-			if playedHonk && !playedRocket {
-				time.Sleep(2 * time.Second)
-			}
-			app.sendPRNotification(ctx, pr, "Your PR is Blocked 🚀", "rocket", &playedRocket)
-		}
+	}()
 
-		// Auto-open if enabled
-		if app.enableAutoBrowser && time.Since(app.startTime) > startupGracePeriod {
-			app.tryAutoOpenPR(ctx, pr, app.enableAutoBrowser, app.startTime)
-		}
-	}
-
-	// Update menu if we sent notifications
+	// Update menu immediately after sending notifications
+	// This needs to happen in the main thread to show the party popper emoji
 	if len(toNotify) > 0 {
 		slog.Info("[FLOW] Updating menu after sending notifications", "notified_count", len(toNotify))
 		app.updateMenu(ctx)
@@ -100,12 +105,14 @@ func (app *App) processNotifications(ctx context.Context) {
 func (app *App) sendPRNotification(ctx context.Context, pr PR, title string, soundType string, playedSound *bool) {
 	message := fmt.Sprintf("%s #%d: %s", pr.Repository, pr.Number, pr.Title)
 
-	// Send desktop notification
-	if err := beeep.Notify(title, message, ""); err != nil {
-		slog.Error("[NOTIFY] Failed to send notification", "url", pr.URL, "error", err)
-	}
+	// Send desktop notification in a goroutine to avoid blocking
+	go func() {
+		if err := beeep.Notify(title, message, ""); err != nil {
+			slog.Error("[NOTIFY] Failed to send notification", "url", pr.URL, "error", err)
+		}
+	}()
 
-	// Play sound (only once per type per cycle)
+	// Play sound (only once per type per cycle) - already async in playSound
 	if !*playedSound {
 		slog.Debug("[NOTIFY] Playing sound for PR", "soundType", soundType, "repo", pr.Repository, "number", pr.Number)
 		app.playSound(ctx, soundType)
