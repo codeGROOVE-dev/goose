@@ -4,8 +4,6 @@ github.com/codeGROOVE-dev/prx v0.0.0-20251001143458-17e6b58fb46c h1:/rrjFoqwFqKN
 github.com/codeGROOVE-dev/prx v0.0.0-20251001143458-17e6b58fb46c/go.mod h1:7qLbi18baOyS8yO/6/64SBIqtyzSzLFdsDST15NPH3w=
 github.com/codeGROOVE-dev/retry v1.2.0 h1:xYpYPX2PQZmdHwuiQAGGzsBm392xIMl4nfMEFApQnu8=
 github.com/codeGROOVE-dev/retry v1.2.0/go.mod h1:8OgefgV1XP7lzX2PdKlCXILsYKuz6b4ZpHa/20iLi8E=
-github.com/codeGROOVE-dev/sprinkler v0.0.0-20251006230512-cc6accef7f7a h1:RNG9GGKOgAQx+GldnrF0YonTORNllzIdYkvOeZfnWWE=
-github.com/codeGROOVE-dev/sprinkler v0.0.0-20251006230512-cc6accef7f7a/go.mod h1:RZ/Te7HkY5upHQlnmf3kV4GHVM0R8AK3U+yPItCZAoQ=
 github.com/codeGROOVE-dev/sprinkler v0.0.0-20251007014926-7fed60b70e75 h1:I+gBQZoB2QCiV++lNOxUNMiNvyfeyhN7oy89U/hTjtw=
 github.com/codeGROOVE-dev/sprinkler v0.0.0-20251007014926-7fed60b70e75/go.mod h1:RZ/Te7HkY5upHQlnmf3kV4GHVM0R8AK3U+yPItCZAoQ=
 github.com/codeGROOVE-dev/turnclient v0.0.0-20251001194229-2aaea2e63cc7 h1:iRWrlJusl5FiEC1sCiPoW8IFei5bebAIornGtQFUHbc=
@@ -54,8 +52,8 @@ github.com/tevino/abool v0.0.0-20220530134649-2bfc934cb23c h1:coVla7zpsycc+kA9NX
 github.com/tevino/abool v0.0.0-20220530134649-2bfc934cb23c/go.mod h1:qc66Pna1RiIsPa7O4Egxxs9OqkuxDX55zznh9K07Tzg=
 golang.org/x/net v0.44.0 h1:evd8IRDyfNBMBTTY5XRF1vaZlD+EmWx6x8PkhR04H/I=
 golang.org/x/net v0.44.0/go.mod h1:ECOoLqd5U3Lhyeyo/QDCEVQ4sNgYsqvCZ722XogGieY=
-golang.org/x/oauth2 v0.31.0 h1:8Fq0yVZLh4j4YA47vHKFTa9Ew5XIrCP8LC6UeNZnLxo=
-golang.org/x/oauth2 v0.31.0/go.mod h1:lzm5WQJQwKZ3nwavOZ3IS5Aulzxi68dUSgRHujetwEA=
+golang.org/x/oauth2 v0.32.0 h1:jsCblLleRMDrxMN29H3z/k1KliIvpLgCkE6R8FXXNgY=
+golang.org/x/oauth2 v0.32.0/go.mod h1:lzm5WQJQwKZ3nwavOZ3IS5Aulzxi68dUSgRHujetwEA=
 golang.org/x/sys v0.0.0-20200515095857-1151b9dac4a9/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/sys v0.1.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
 golang.org/x/sys v0.36.0 h1:KVRy2GtZBrk1cBYA7MKu5bEZFxQk4NIDV6RLVcC8o0k=
