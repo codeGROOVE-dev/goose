@@ -6,7 +6,7 @@ require (
 	github.com/codeGROOVE-dev/retry v1.3.1
 	github.com/codeGROOVE-dev/sprinkler v0.0.0-20260116155051-e79e5c01d956
 	github.com/codeGROOVE-dev/turnclient v0.0.0-20260116163536-b91f21bbe0c9
-	github.com/energye/systray v1.0.2
+	github.com/energye/systray v1.0.3
 	github.com/gen2brain/beeep v0.11.2
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/google/go-github/v57 v57.0.0
@@ -30,7 +30,6 @@ require (
 	github.com/sergeymakinen/go-bmp v1.0.0 // indirect
 	github.com/sergeymakinen/go-ico v1.0.0 // indirect
 	github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af // indirect
-	github.com/tevino/abool v0.0.0-20220530134649-2bfc934cb23c // indirect
 	golang.org/x/net v0.49.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.33.0 // indirect
