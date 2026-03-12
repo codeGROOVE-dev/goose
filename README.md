@@ -19,7 +19,7 @@ Homebrew users can get the party started quickly:
 
 ```shell
 
-brew install --cask codeGROOVE-dev/homebrew-tap/reviewGOOSE
+brew install --cask codegroove-dev/tap/review-goose
 gh auth status || gh auth login
 ```
 
@@ -30,7 +30,7 @@ Open `/Applications/reviewGOOSE.app`. To be persistently annoyed every time you 
 On a progressive Linux distribution that includes Homebrew, such as [Bluefin](https://projectbluefin.io/)? You are just a cut and paste away from excitement:
 
 ```shell
-brew install codeGROOVE-dev/homebrew-tap/reviewGOOSE
+brew install codeGROOVE-dev/tap/reviewGOOSE
 gh auth status || gh auth login
 ```
 
