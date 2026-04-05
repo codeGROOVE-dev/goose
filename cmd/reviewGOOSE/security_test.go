@@ -138,11 +138,16 @@ func TestValidateGitHubToken(t *testing.T) {
 		},
 		{
 			name:    "fine-grained PAT",
-			token:   "github_pat_" + strings.Repeat("a", 82),
+			token:   "github_pat_" + strings.Repeat("a", 22) + "_" + strings.Repeat("b", 59),
 			wantErr: false,
 		},
 
 		// Invalid tokens
+		{
+			name:    "fine-grained PAT",
+			token:   "github_pat_" + strings.Repeat("a", 82),
+			wantErr: true,
+		},
 		{
 			name:    "empty string",
 			token:   "",
@@ -223,7 +228,7 @@ func TestSanitizeForLog(t *testing.T) {
 		},
 		{
 			name:     "fine-grained PAT redacted",
-			input:    "token=github_pat_" + strings.Repeat("b", 82),
+			input:    "token=github_pat_" + strings.Repeat("a", 22) + "_" + strings.Repeat("b", 59),
 			wantHide: true,
 		},
 		{
