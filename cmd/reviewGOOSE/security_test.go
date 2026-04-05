@@ -144,7 +144,7 @@ func TestValidateGitHubToken(t *testing.T) {
 
 		// Invalid tokens
 		{
-			name:    "fine-grained PAT",
+			name:    "fine-grained PAT missing underscore",
 			token:   "github_pat_" + strings.Repeat("a", 82),
 			wantErr: true,
 		},
