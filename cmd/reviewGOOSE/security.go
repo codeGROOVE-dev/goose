@@ -26,8 +26,8 @@ var (
 	// githubTokenRegex validates GitHub token format.
 	// Classic tokens: 40 hex chars.
 	// New tokens: ghp_ (personal), ghs_ (server), ghr_ (refresh), gho_ (OAuth), ghu_ (user-to-server) followed by base62 chars.
-	// Fine-grained tokens: github_pat_ followed by base62 chars.
-	githubTokenRegex = regexp.MustCompile(`^[a-f0-9]{40}$|^gh[psoru]_[A-Za-z0-9]{36,251}$|^github_pat_[A-Za-z0-9]{82}$`)
+	// Fine-grained tokens: github_pat_ followed by 22 base62 chars, underscore, and 59 base62 chars.
+	githubTokenRegex = regexp.MustCompile(`^[a-f0-9]{40}$|^gh[psoru]_[A-Za-z0-9]{36,251}$|^github_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59}$`)
 )
 
 // validateGitHubUsername validates a GitHub username.
@@ -80,7 +80,7 @@ func sanitizeForLog(s string) string {
 	// New format tokens (ghp_, ghs_, ghr_, gho_, ghu_)
 	s = regexp.MustCompile(`\bgh[psoru]_[A-Za-z0-9]{36,251}\b`).ReplaceAllString(s, "[REDACTED-TOKEN]")
 	// Fine-grained personal access tokens
-	s = regexp.MustCompile(`\bgithub_pat_[A-Za-z0-9]{82}\b`).ReplaceAllString(s, "[REDACTED-TOKEN]")
+	s = regexp.MustCompile(`\bgithub_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59}\b`).ReplaceAllString(s, "[REDACTED-TOKEN]")
 	// Bearer tokens in headers
 	s = regexp.MustCompile(`Bearer [A-Za-z0-9_\-.]+`).ReplaceAllString(s, "Bearer [REDACTED]")
 	// Authorization headers
